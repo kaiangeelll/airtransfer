@@ -1,0 +1,9 @@
+cloudflared.exe
+data/*.db
+data/*.txt
+__pycache__/
+*.pyc
+.env
+.DS_Store
+uploads/*
+!uploads/.gitkeep
