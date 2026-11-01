@@ -1,18 +1,25 @@
 /**
- * AirTransfer - High-Speed PC & iPhone Synchronizer
+ * AirTransfer - High-Speed & Secure PC & iPhone Synchronizer
  */
 
 // State
 let myDeviceId = 'dev_' + Math.random().toString(36).substring(2, 9);
 let myDeviceName = 'Устройство';
 let myDeviceType = 'desktop';
+let myAppPin = localStorage.getItem('airtransfer_pin') || '7777';
+let defaultRecipient = localStorage.getItem('airtransfer_default_recipient') || 'Всем';
+let knownDevices = new Set(['Всем']);
+
 let activeFilter = 'all';
-let allItems = []; // combined files and texts
+let allItems = [];
 let ws = null;
 let currentServerUrl = window.location.origin;
 let qrCodeInstance = null;
+let tunnelUrl = null;
+let localUrl = null;
+let currentModalMode = 'internet';
 
-// Sound Effects via Web Audio API (Zero external assets needed)
+// Sound Effects via Web Audio API
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 function playChime() {
     try {
@@ -23,37 +30,37 @@ function playChime() {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, now); // D5
-        osc.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+        osc.frequency.setValueAtTime(587.33, now);
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
         gain.gain.setValueAtTime(0.08, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.start(now);
         osc.stop(now + 0.28);
-    } catch (e) {
-        // audio might be blocked until user interaction
-    }
+    } catch (e) {}
 }
 
-// Device Detection
+// Device Detection & Saved Name
 function detectDevice() {
+    const savedName = localStorage.getItem('airtransfer_device_name');
     const ua = navigator.userAgent;
+
     if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {
         myDeviceType = 'ios';
-        myDeviceName = '📱 iPhone';
+        myDeviceName = savedName || '📱 Мой iPhone';
     } else if (/Android/.test(ua)) {
         myDeviceType = 'android';
-        myDeviceName = '🤖 Android';
+        myDeviceName = savedName || '🤖 Мой Android';
     } else if (/Macintosh|Mac OS X/.test(ua)) {
         myDeviceType = 'desktop';
-        myDeviceName = '💻 Mac';
+        myDeviceName = savedName || '💻 Мой Mac';
     } else if (/Windows/.test(ua)) {
         myDeviceType = 'desktop';
-        myDeviceName = '💻 Windows PC';
+        myDeviceName = savedName || '💻 Мой ПК';
     } else {
         myDeviceType = 'desktop';
-        myDeviceName = '💻 Компьютер';
+        myDeviceName = savedName || '💻 Компьютер';
     }
 
     const badge = document.getElementById('deviceBadge');
@@ -76,6 +83,17 @@ function showToast(message, icon = 'ℹ️') {
         toast.style.transition = 'all 0.3s ease';
         setTimeout(() => toast.remove(), 300);
     }, 2800);
+}
+
+// Authenticated Fetch Helper
+function authFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    if (options.headers instanceof Headers) {
+        options.headers.set('X-App-Pin', myAppPin);
+    } else {
+        options.headers['X-App-Pin'] = myAppPin;
+    }
+    return fetch(url, options);
 }
 
 // Format Helpers
@@ -116,14 +134,22 @@ function autoLinkText(text) {
 
 // WebSocket Setup
 function initWebSocket() {
+    if (!myAppPin) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const wsUrl = `${protocol}//${window.location.host}/ws?pin=${encodeURIComponent(myAppPin)}`;
+
+    try {
+        if (ws) {
+            ws.onclose = null;
+            ws.close();
+        }
+    } catch (e) {}
 
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-        // Send handshake
         ws.send(JSON.stringify({
+            pin: myAppPin,
             device_id: myDeviceId,
             device_name: myDeviceName,
             device_type: myDeviceType
@@ -140,27 +166,23 @@ function initWebSocket() {
     };
 
     ws.onclose = () => {
-        // Auto reconnect in 2s
-        setTimeout(initWebSocket, 2000);
+        setTimeout(initWebSocket, 2500);
     };
 
     ws.onerror = (err) => {
-        console.warn('WS error, reconnecting...', err);
         ws.close();
     };
 }
 
-let tunnelUrl = null;
-let localUrl = null;
-let currentModalMode = 'internet'; // 'internet' or 'local'
-
 function handleWsMessage(data) {
-    if (data.type === 'peers_update') {
+    if (data.type === 'auth_error') {
+        showPinLockModal('Неверный PIN-код доступа');
+    } else if (data.type === 'peers_update') {
         updatePeersList(data.peers);
     } else if (data.type === 'tunnel_ready') {
         tunnelUrl = data.tunnel_url;
         updateModalUrls();
-        showToast('Публичный интернет-доступ подключен!', '🌍');
+        showToast('Интернет-доступ Cloudflare подключен!', '🌍');
     } else if (data.type === 'new_file') {
         const item = { ...data.item, kind: 'file' };
         addItemToFeed(item, true);
@@ -182,15 +204,17 @@ function handleWsMessage(data) {
     }
 }
 
+// Update Active Devices & Target Selectors
 function updatePeersList(peers) {
     const container = document.getElementById('devicesList');
     const peersCount = document.getElementById('peersCount');
-    if (!container) return;
+    const targetSelect = document.getElementById('targetDeviceSelect');
+    const settingsDefaultSelect = document.getElementById('settingsDefaultRecipient');
 
+    if (!container) return;
     container.innerHTML = '';
     peersCount.textContent = `${peers.length} устр.`;
 
-    // Always put "All" option first
     const allChip = document.createElement('div');
     allChip.className = 'device-chip active';
     allChip.innerHTML = `<span class="chip-dot"></span><span class="chip-name">Общий поток (Всем)</span>`;
@@ -205,16 +229,54 @@ function updatePeersList(peers) {
             <span class="chip-name">${escapeHtml(peer.name)} ${isMe ? '(Вы)' : ''}</span>
         `;
         container.appendChild(chip);
+
+        if (!isMe && peer.name) {
+            knownDevices.add(peer.name);
+        }
     });
+
+    // Populate Target Selectors
+    if (targetSelect) {
+        const currentVal = targetSelect.value || defaultRecipient;
+        targetSelect.innerHTML = `<option value="Всем">🌐 Всем моим устройствам</option>`;
+        knownDevices.forEach(dev => {
+            if (dev !== 'Всем') {
+                const opt = document.createElement('option');
+                opt.value = dev;
+                opt.textContent = `🎯 ${dev}`;
+                targetSelect.appendChild(opt);
+            }
+        });
+        targetSelect.value = currentVal;
+    }
+
+    if (settingsDefaultSelect) {
+        settingsDefaultSelect.innerHTML = `<option value="Всем">🌐 Всем моим устройствам</option>`;
+        knownDevices.forEach(dev => {
+            if (dev !== 'Всем') {
+                const opt = document.createElement('option');
+                opt.value = dev;
+                opt.textContent = `🎯 ${dev}`;
+                settingsDefaultSelect.appendChild(opt);
+            }
+        });
+        settingsDefaultSelect.value = defaultRecipient;
+    }
 }
 
 // Feed Management
 async function loadInitialData() {
     try {
         const [textsRes, filesRes] = await Promise.all([
-            fetch('/api/texts'),
-            fetch('/api/files')
+            authFetch('/api/texts'),
+            authFetch('/api/files')
         ]);
+
+        if (textsRes.status === 401 || filesRes.status === 401) {
+            showPinLockModal('Введите PIN-код для входа');
+            return;
+        }
+
         const texts = await textsRes.json();
         const files = await filesRes.json();
 
@@ -232,7 +294,6 @@ async function loadInitialData() {
 }
 
 function addItemToFeed(item, highlight = false) {
-    // Avoid duplicates
     if (allItems.some(x => x.kind === item.kind && x.id === item.id)) return;
     allItems.unshift(item);
     renderFeed(highlight ? item : null);
@@ -259,7 +320,7 @@ function renderFeed(highlightItem = null) {
         container.innerHTML = `
             <div class="empty-state">
                 <div class="empty-icon">📭</div>
-                <p class="empty-text">Нет элементов в истории. Отправьте файл или заметку!</p>
+                <p class="empty-text">История пуста. Отправьте файл или заметку!</p>
             </div>
         `;
         return;
@@ -282,12 +343,16 @@ function renderTextItem(item) {
 
     const formattedTime = formatDate(item.created_at);
     const contentHtml = autoLinkText(item.content);
+    const targetTag = (item.target_device && item.target_device !== 'Всем') 
+        ? `<span class="target-badge">➔ Для: ${escapeHtml(item.target_device)}</span>` 
+        : '';
 
     div.innerHTML = `
         <div class="item-meta">
             <span class="meta-sender">
                 <span>📝</span>
                 <span>От: <b>${escapeHtml(item.sender_device)}</b></span>
+                ${targetTag}
             </span>
             <span class="meta-time">${formattedTime}</span>
         </div>
@@ -312,7 +377,6 @@ function renderTextItem(item) {
         </div>
     `;
 
-    // Hook copy button
     const copyBtn = div.querySelector('.copy-text-btn');
     copyBtn.addEventListener('click', () => {
         copyToClipboard(item.content, copyBtn);
@@ -329,11 +393,15 @@ function renderFileItem(item) {
     const formattedTime = formatDate(item.created_at);
     const sizeStr = formatBytes(item.file_size);
     const fileUrl = `/uploads/${encodeURIComponent(item.filename)}`;
-    const downloadUrl = `/api/download/${encodeURIComponent(item.filename)}`;
+    const downloadUrl = `/api/download/${encodeURIComponent(item.filename)}?pin=${encodeURIComponent(myAppPin)}`;
 
     const isImage = item.content_type.startsWith('image/');
     const isVideo = item.content_type.startsWith('video/');
     const isAudio = item.content_type.startsWith('audio/');
+
+    const targetTag = (item.target_device && item.target_device !== 'Всем') 
+        ? `<span class="target-badge">➔ Для: ${escapeHtml(item.target_device)}</span>` 
+        : '';
 
     let previewHtml = '';
     if (isImage) {
@@ -364,6 +432,7 @@ function renderFileItem(item) {
             <span class="meta-sender">
                 <span>📁</span>
                 <span>От: <b>${escapeHtml(item.sender_device)}</b></span>
+                ${targetTag}
             </span>
             <span class="meta-time">${formattedTime}</span>
         </div>
@@ -421,7 +490,7 @@ async function copyToClipboard(text, btnElement = null) {
 async function deleteText(id) {
     if (!confirm('Удалить эту заметку?')) return;
     try {
-        await fetch(`/api/texts/${id}`, { method: 'DELETE' });
+        await authFetch(`/api/texts/${id}`, { method: 'DELETE' });
     } catch (e) {
         showToast('Ошибка при удалении', '❌');
     }
@@ -430,7 +499,7 @@ async function deleteText(id) {
 async function deleteFile(id) {
     if (!confirm('Удалить этот файл?')) return;
     try {
-        await fetch(`/api/files/${id}`, { method: 'DELETE' });
+        await authFetch(`/api/files/${id}`, { method: 'DELETE' });
     } catch (e) {
         showToast('Ошибка при удалении', '❌');
     }
@@ -440,12 +509,16 @@ async function deleteFile(id) {
 function uploadFiles(fileList) {
     if (!fileList || fileList.length === 0) return;
 
+    const targetSelect = document.getElementById('targetDeviceSelect');
+    const targetRecipient = targetSelect ? targetSelect.value : 'Всем';
+
     const formData = new FormData();
     for (let i = 0; i < fileList.length; i++) {
         formData.append('files', fileList[i]);
     }
     formData.append('sender_device', myDeviceName);
-    formData.append('target_device', 'Всем');
+    formData.append('target_device', targetRecipient);
+    formData.append('pin', myAppPin);
 
     const progressCard = document.getElementById('uploadProgressCard');
     const progressBar = document.getElementById('progressBarFill');
@@ -453,13 +526,14 @@ function uploadFiles(fileList) {
     const progressTitle = document.getElementById('progressFileName');
 
     const nameText = fileList.length === 1 ? fileList[0].name : `${fileList.length} файлов...`;
-    progressTitle.textContent = `Отправка: ${nameText}`;
+    progressTitle.textContent = `Отправка для [${targetRecipient}]: ${nameText}`;
     progressBar.style.width = '0%';
     progressPercent.textContent = '0%';
     progressCard.style.display = 'block';
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload', true);
+    xhr.setRequestHeader('X-App-Pin', myAppPin);
 
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -472,10 +546,11 @@ function uploadFiles(fileList) {
     xhr.onload = () => {
         progressCard.style.display = 'none';
         if (xhr.status === 200) {
-            showToast('Успешно отправлено!', '🚀');
-            // reset file inputs
+            showToast(`Успешно отправлено для ${targetRecipient}!`, '🚀');
             document.getElementById('fileInputAll').value = '';
             document.getElementById('fileInputMedia').value = '';
+        } else if (xhr.status === 401) {
+            showPinLockModal('Сессия истекла или неверный PIN');
         } else {
             showToast('Ошибка при отправке файла', '❌');
         }
@@ -522,6 +597,85 @@ function closeLightbox() {
     const container = document.getElementById('lightboxMediaContainer');
     container.innerHTML = '';
     modal.style.display = 'none';
+}
+
+// QR Code Modal & Server Info
+async function setupQrModal() {
+    const modal = document.getElementById('qrModal');
+    const openBtn = document.getElementById('openQrBtn');
+    const closeBtn = document.getElementById('closeQrBtn');
+    const copyUrlBtn = document.getElementById('copyUrlBtn');
+    const tabInternetMode = document.getElementById('tabInternetMode');
+    const tabLocalMode = document.getElementById('tabLocalMode');
+    const ipSelect = document.getElementById('ipSelect');
+
+    let allIps = [];
+    let port = 8000;
+
+    try {
+        const res = await authFetch('/api/info');
+        const info = await res.json();
+        allIps = info.all_ips || [window.location.hostname];
+        port = info.port || 8000;
+        if (info.tunnel_url) {
+            tunnelUrl = info.tunnel_url;
+        }
+    } catch {
+        allIps = [window.location.hostname];
+    }
+
+    localUrl = `http://${allIps[0]}:${port}`;
+
+    if (allIps.length > 0) {
+        ipSelect.innerHTML = '';
+        allIps.forEach(ip => {
+            const opt = document.createElement('option');
+            opt.value = `http://${ip}:${port}`;
+            opt.textContent = `${ip} ${ip.startsWith('192.168.') ? '(Основной Wi-Fi)' : ip.startsWith('172.20.') ? '(USB Модем iPhone)' : ''}`;
+            ipSelect.appendChild(opt);
+        });
+        ipSelect.addEventListener('change', (e) => {
+            localUrl = e.target.value;
+            if (currentModalMode === 'local') {
+                updateModalUrls();
+            }
+        });
+    }
+
+    tabInternetMode.addEventListener('click', () => {
+        tabInternetMode.classList.add('active');
+        tabLocalMode.classList.remove('active');
+        currentModalMode = 'internet';
+        updateModalUrls();
+    });
+
+    tabLocalMode.addEventListener('click', () => {
+        tabLocalMode.classList.add('active');
+        tabInternetMode.classList.remove('active');
+        currentModalMode = 'local';
+        updateModalUrls();
+    });
+
+    updateModalUrls();
+
+    openBtn.addEventListener('click', () => {
+        modal.style.display = 'flex';
+        updateModalUrls();
+    });
+
+    closeBtn.addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+
+    copyUrlBtn.addEventListener('click', () => {
+        if (currentServerUrl && currentServerUrl.startsWith('http')) {
+            copyToClipboard(currentServerUrl);
+        }
+    });
 }
 
 function updateModalUrls() {
@@ -571,84 +725,77 @@ function updateModalUrls() {
     }
 }
 
-// QR Code Modal & Server Info
-async function setupQrModal() {
-    const modal = document.getElementById('qrModal');
-    const openBtn = document.getElementById('openQrBtn');
-    const closeBtn = document.getElementById('closeQrBtn');
-    const copyUrlBtn = document.getElementById('copyUrlBtn');
-    const tabInternetMode = document.getElementById('tabInternetMode');
-    const tabLocalMode = document.getElementById('tabLocalMode');
-    const ipSelect = document.getElementById('ipSelect');
+// PIN Security Modal
+function showPinLockModal(customMessage = null) {
+    const modal = document.getElementById('pinLockModal');
+    const pinInput = document.getElementById('pinInput');
+    const subtitle = modal.querySelector('.pin-lock-subtitle');
 
-    let allIps = [];
-    let port = 8000;
-
-    try {
-        const res = await fetch('/api/info');
-        const info = await res.json();
-        allIps = info.all_ips || [window.location.hostname];
-        port = info.port || 8000;
-        if (info.tunnel_url) {
-            tunnelUrl = info.tunnel_url;
-        }
-    } catch {
-        allIps = [window.location.hostname];
+    if (customMessage) {
+        subtitle.textContent = customMessage;
+        subtitle.style.color = 'var(--accent-red)';
     }
 
-    localUrl = `http://${allIps[0]}:${port}`;
+    modal.style.display = 'flex';
+    pinInput.value = '';
+    pinInput.focus();
+}
 
-    if (allIps.length > 0) {
-        ipSelect.innerHTML = '';
-        allIps.forEach(ip => {
-            const opt = document.createElement('option');
-            opt.value = `http://${ip}:${port}`;
-            opt.textContent = `${ip} ${ip.startsWith('192.168.') ? '(Основной Wi-Fi)' : ip.startsWith('172.20.') ? '(USB Модем iPhone)' : ''}`;
-            ipSelect.appendChild(opt);
-        });
-        ipSelect.addEventListener('change', (e) => {
-            localUrl = e.target.value;
-            if (currentModalMode === 'local') {
-                updateModalUrls();
+function hidePinLockModal() {
+    const modal = document.getElementById('pinLockModal');
+    modal.style.display = 'none';
+}
+
+function setupPinLock() {
+    const form = document.getElementById('pinLockForm');
+    const pinInput = document.getElementById('pinInput');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pin = pinInput.value.trim();
+        if (!pin) return;
+
+        try {
+            const res = await fetch('/api/auth/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin: pin })
+            });
+
+            if (res.ok) {
+                myAppPin = pin;
+                localStorage.setItem('airtransfer_pin', pin);
+                hidePinLockModal();
+                showToast('Вход успешно выполнен!', '🔓');
+                initWebSocket();
+                loadInitialData();
+            } else {
+                showToast('Неверный PIN-код!', '❌');
+                pinInput.value = '';
+                pinInput.focus();
             }
-        });
-    }
-
-    // Modal Mode tabs
-    tabInternetMode.addEventListener('click', () => {
-        tabInternetMode.classList.add('active');
-        tabLocalMode.classList.remove('active');
-        currentModalMode = 'internet';
-        updateModalUrls();
+        } catch {
+            showToast('Сетевая ошибка при проверке PIN', '❌');
+        }
     });
+}
 
-    tabLocalMode.addEventListener('click', () => {
-        tabLocalMode.classList.add('active');
-        tabInternetMode.classList.remove('active');
-        currentModalMode = 'local';
-        updateModalUrls();
-    });
-
-    // Initial render
-    updateModalUrls();
-
-    // Check again in 3s for tunnel URL if it wasn't ready
-    if (!tunnelUrl) {
-        setTimeout(async () => {
-            try {
-                const res = await fetch('/api/info');
-                const info = await res.json();
-                if (info.tunnel_url) {
-                    tunnelUrl = info.tunnel_url;
-                    updateModalUrls();
-                }
-            } catch {}
-        }, 3000);
-    }
+// Settings Modal
+function setupSettingsModal() {
+    const modal = document.getElementById('settingsModal');
+    const openBtn = document.getElementById('openSettingsBtn');
+    const closeBtn = document.getElementById('closeSettingsBtn');
+    const deviceNameInput = document.getElementById('settingsDeviceName');
+    const defaultRecipientSelect = document.getElementById('settingsDefaultRecipient');
+    const saveBtn = document.getElementById('btnSaveSettings');
+    const changePinBtn = document.getElementById('btnChangePin');
+    const oldPinInput = document.getElementById('settingsOldPin');
+    const newPinInput = document.getElementById('settingsNewPin');
 
     openBtn.addEventListener('click', () => {
+        deviceNameInput.value = myDeviceName;
+        defaultRecipientSelect.value = defaultRecipient;
         modal.style.display = 'flex';
-        updateModalUrls();
     });
 
     closeBtn.addEventListener('click', () => {
@@ -659,10 +806,65 @@ async function setupQrModal() {
         if (e.target === modal) modal.style.display = 'none';
     });
 
-    copyUrlBtn.addEventListener('click', () => {
-        if (currentServerUrl && currentServerUrl.startsWith('http')) {
-            copyToClipboard(currentServerUrl);
+    // Save Settings
+    saveBtn.addEventListener('click', () => {
+        const newName = deviceNameInput.value.trim();
+        if (newName) {
+            myDeviceName = newName;
+            localStorage.setItem('airtransfer_device_name', newName);
+            document.getElementById('deviceBadge').textContent = `Вы: ${newName}`;
         }
+
+        defaultRecipient = defaultRecipientSelect.value;
+        localStorage.setItem('airtransfer_default_recipient', defaultRecipient);
+        document.getElementById('targetDeviceSelect').value = defaultRecipient;
+
+        modal.style.display = 'none';
+        showToast('Настройки сохранены!', '✅');
+
+        // Reconnect WebSocket with new device name
+        initWebSocket();
+    });
+
+    // Change PIN
+    changePinBtn.addEventListener('click', async () => {
+        const oldPin = oldPinInput.value.trim();
+        const newPin = newPinInput.value.trim();
+
+        if (!oldPin || !newPin) {
+            showToast('Заполните оба поля PIN-кода', '⚠️');
+            return;
+        }
+
+        try {
+            const res = await authFetch('/api/settings/pin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_pin: oldPin, new_pin: newPin })
+            });
+
+            if (res.ok) {
+                myAppPin = newPin;
+                localStorage.setItem('airtransfer_pin', newPin);
+                oldPinInput.value = '';
+                newPinInput.value = '';
+                showToast('PIN-код успешно обновлен!', '🔐');
+            } else {
+                const err = await res.json();
+                showToast(err.detail || 'Ошибка смены PIN', '❌');
+            }
+        } catch {
+            showToast('Ошибка при отправке запроса', '❌');
+        }
+    });
+
+    // Fast save default recipient button in the header
+    const saveDefaultBtn = document.getElementById('saveDefaultRecipientBtn');
+    saveDefaultBtn.addEventListener('click', () => {
+        const targetSelect = document.getElementById('targetDeviceSelect');
+        defaultRecipient = targetSelect.value;
+        localStorage.setItem('airtransfer_default_recipient', defaultRecipient);
+        showToast(`Получатель по умолчанию: ${defaultRecipient}`, '⭐️');
     });
 }
 
@@ -714,7 +916,6 @@ function setupEvents() {
 
     // Paste event (Ctrl + V anywhere to paste image or files)
     window.addEventListener('paste', (e) => {
-        // If user is focused in text input, let default paste happen unless it's an image
         const items = (e.clipboardData || e.originalEvent.clipboardData).items;
         let filesToUpload = [];
         for (let item of items) {
@@ -742,22 +943,27 @@ function setupEvents() {
         const content = textContent.value.trim();
         if (!content) return;
 
+        const targetSelect = document.getElementById('targetDeviceSelect');
+        const targetRecipient = targetSelect ? targetSelect.value : 'Всем';
+
         try {
-            const res = await fetch('/api/texts', {
+            const res = await authFetch('/api/texts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     title: title,
                     content: content,
                     sender_device: myDeviceName,
-                    target_device: 'Всем'
+                    target_device: targetRecipient
                 })
             });
 
             if (res.ok) {
                 textContent.value = '';
                 textTitle.value = '';
-                showToast('Заметка сохранена и отправлена!', '📝');
+                showToast(`Заметка сохранена для [${targetRecipient}]!`, '📝');
+            } else if (res.status === 401) {
+                showPinLockModal('Сессия истекла или неверный PIN');
             } else {
                 showToast('Ошибка при сохранении текста', '❌');
             }
@@ -766,7 +972,7 @@ function setupEvents() {
         }
     });
 
-    // Ctrl + Enter shortcut for sending text
+    // Ctrl + Enter shortcut
     textContent.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
@@ -804,7 +1010,7 @@ function setupEvents() {
     clearHistoryBtn.addEventListener('click', async () => {
         if (!confirm('Вы уверены, что хотите полностью очистить всю историю и файлы?')) return;
         try {
-            await fetch('/api/clear-history', { method: 'POST' });
+            await authFetch('/api/clear-history', { method: 'POST' });
         } catch {
             showToast('Ошибка при очистке', '❌');
         }
@@ -820,8 +1026,24 @@ function setupEvents() {
 // App Initialization
 window.addEventListener('DOMContentLoaded', () => {
     detectDevice();
-    initWebSocket();
+    setupPinLock();
+    setupSettingsModal();
     setupEvents();
     setupQrModal();
-    loadInitialData();
+
+    // Verify PIN before initial load
+    fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: myAppPin })
+    }).then(res => {
+        if (res.ok) {
+            initWebSocket();
+            loadInitialData();
+        } else {
+            showPinLockModal();
+        }
+    }).catch(() => {
+        showPinLockModal();
+    });
 });

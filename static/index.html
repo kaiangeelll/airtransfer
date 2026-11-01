@@ -29,6 +29,13 @@
             </div>
 
             <div class="header-actions">
+                <button class="btn-qr" id="openSettingsBtn" title="Настройки и безопасность">
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>Настройки</span>
+                </button>
                 <button class="btn-qr" id="openQrBtn" title="Подключить iPhone">
                     <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
                         <rect x="3" y="3" width="7" height="7"></rect>
@@ -68,6 +75,24 @@
 
             <!-- Sender Hub (Tabs: Files or Notes) -->
             <section class="send-section card">
+                <!-- Target Recipient Selector -->
+                <div class="recipient-selector-bar">
+                    <div class="recipient-label">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                        <span>Куда отправить:</span>
+                    </div>
+                    <div class="recipient-controls">
+                        <select id="targetDeviceSelect" class="form-select form-select-sm">
+                            <option value="Всем">🌐 Всем моим устройствам</option>
+                        </select>
+                        <button type="button" class="btn btn-sm btn-secondary" id="saveDefaultRecipientBtn" title="Сделать основным получателем">
+                            <span>⭐️ По умолчанию</span>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="tab-headers">
                     <button class="tab-btn active" data-tab="filesTab">
                         <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
@@ -268,6 +293,71 @@
                     <span id="lightboxFileName"></span>
                     <a id="lightboxDownloadBtn" class="btn btn-primary btn-sm" download>⬇️ Скачать оригинал</a>
                 </div>
+            </div>
+        </div>
+
+        <!-- Settings & Security Modal -->
+        <div class="modal-overlay" id="settingsModal" style="display: none;">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>⚙️ Настройки и безопасность</h3>
+                    <button class="modal-close-btn" id="closeSettingsBtn">&times;</button>
+                </div>
+                <div class="modal-body settings-modal-body">
+                    <div class="settings-group">
+                        <label class="settings-label" for="settingsDeviceName">Имя этого устройства:</label>
+                        <input type="text" id="settingsDeviceName" class="form-input" placeholder="Например: Мой iPhone 15 или Мой ПК">
+                        <span class="settings-hint">Это имя будут видеть другие ваши устройства при передаче.</span>
+                    </div>
+
+                    <div class="settings-group">
+                        <label class="settings-label" for="settingsDefaultRecipient">Получатель по умолчанию:</label>
+                        <select id="settingsDefaultRecipient" class="form-select">
+                            <option value="Всем">🌐 Всем моим устройствам</option>
+                        </select>
+                        <span class="settings-hint">Файлы и заметки будут автоматически отправляться выбранному устройству.</span>
+                    </div>
+
+                    <div class="settings-group pin-change-group">
+                        <label class="settings-label">Секретный PIN-код доступа:</label>
+                        <div class="pin-inputs-row">
+                            <input type="password" id="settingsOldPin" class="form-input" placeholder="Текущий PIN" maxlength="12">
+                            <input type="password" id="settingsNewPin" class="form-input" placeholder="Новый PIN" maxlength="12">
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btnChangePin" style="margin-top: 8px;">
+                            <span>🔐 Сменить PIN-код</span>
+                        </button>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button type="button" class="btn btn-primary" id="btnSaveSettings" style="width: 100%;">
+                            <span>Сохранить настройки</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PIN Lock Screen Modal -->
+        <div class="modal-overlay pin-lock-overlay" id="pinLockModal" style="display: none;">
+            <div class="modal-card pin-lock-card">
+                <div class="pin-lock-header">
+                    <div class="lock-icon-wrap">
+                        <svg viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="2" fill="none">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </div>
+                    <h3>Защищенный личный вход</h3>
+                    <p class="pin-lock-subtitle">Введите секретный PIN-код для доступа к вашим файлам и заметкам.</p>
+                </div>
+                <form class="pin-lock-body" id="pinLockForm">
+                    <input type="password" id="pinInput" class="form-input pin-big-input" placeholder="••••" maxlength="8" autofocus required>
+                    <button type="submit" class="btn btn-primary pin-submit-btn" id="pinSubmitBtn">
+                        <span>Войти</span>
+                    </button>
+                    <div class="pin-hint-text">💡 Стандартный PIN-код: <b>7777</b> (можно сменить в настройках)</div>
+                </form>
             </div>
         </div>
 

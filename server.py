@@ -25,7 +25,7 @@ TUNNEL_URL = None
 TUNNEL_PROCESS = None
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Header, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,9 +71,39 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        # Initialize default PIN '7777'
+        row = conn.execute("SELECT value FROM settings WHERE key = 'pin'").fetchone()
+        if not row:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pin', '7777')")
         conn.commit()
 
 init_db()
+
+# PIN Security Helpers
+def get_current_pin() -> str:
+    env_pin = os.environ.get("APP_PIN")
+    if env_pin:
+        return env_pin.strip()
+    with get_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'pin'").fetchone()
+        return row["value"] if row else "7777"
+
+def verify_pin(provided_pin: Optional[str]) -> bool:
+    if not provided_pin:
+        return False
+    return provided_pin.strip() == get_current_pin()
+
+def check_auth(x_app_pin: Optional[str] = None, pin: Optional[str] = None):
+    val = x_app_pin or pin
+    if not verify_pin(val):
+        raise HTTPException(status_code=401, detail="Неверный PIN-код доступа")
+    return True
 
 # Network Helpers
 def get_local_ips() -> List[str]:
@@ -232,9 +262,38 @@ async def get_info():
         "active_devices_count": len(manager.active_connections)
     }
 
+# Auth & Settings Endpoints
+@app.post("/api/auth/verify")
+async def verify_auth_pin(data: Dict[str, Any]):
+    pin = data.get("pin", "")
+    if verify_pin(pin):
+        return {"status": "ok", "valid": True}
+    raise HTTPException(status_code=401, detail="Неверный PIN-код")
+
+@app.post("/api/settings/pin")
+async def change_pin(
+    data: Dict[str, Any],
+    x_app_pin: Optional[str] = Header(None)
+):
+    old_pin = data.get("old_pin", "").strip()
+    new_pin = data.get("new_pin", "").strip()
+    auth_pin = x_app_pin or old_pin
+
+    if not verify_pin(auth_pin):
+        raise HTTPException(status_code=401, detail="Старый PIN-код неверен")
+    if len(new_pin) < 4:
+        raise HTTPException(status_code=400, detail="Новый PIN должен содержать минимум 4 символа")
+
+    with get_db() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pin', ?)", (new_pin,))
+        conn.commit()
+
+    return {"status": "ok", "message": "PIN-код успешно изменен"}
+
 # Notes / Text Endpoints
 @app.get("/api/texts")
-async def list_texts():
+async def list_texts(x_app_pin: Optional[str] = Header(None), pin: Optional[str] = Query(None)):
+    check_auth(x_app_pin, pin)
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, title, content, sender_device, target_device, created_at FROM texts ORDER BY id DESC"
@@ -242,7 +301,12 @@ async def list_texts():
         return [dict(row) for row in rows]
 
 @app.post("/api/texts")
-async def create_text(data: Dict[str, Any]):
+async def create_text(
+    data: Dict[str, Any],
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Query(None)
+):
+    check_auth(x_app_pin, pin)
     title = data.get("title", "").strip()
     content = data.get("content", "").strip()
     sender_device = data.get("sender_device", "Неизвестное устройство").strip()
@@ -265,7 +329,12 @@ async def create_text(data: Dict[str, Any]):
     return item
 
 @app.delete("/api/texts/{text_id}")
-async def delete_text(text_id: int):
+async def delete_text(
+    text_id: int,
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Query(None)
+):
+    check_auth(x_app_pin, pin)
     with get_db() as conn:
         conn.execute("DELETE FROM texts WHERE id = ?", (text_id,))
         conn.commit()
@@ -274,7 +343,8 @@ async def delete_text(text_id: int):
 
 # Files Endpoints
 @app.get("/api/files")
-async def list_files():
+async def list_files(x_app_pin: Optional[str] = Header(None), pin: Optional[str] = Query(None)):
+    check_auth(x_app_pin, pin)
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, filename, original_name, file_size, content_type, sender_device, target_device, created_at FROM files ORDER BY id DESC"
@@ -285,8 +355,11 @@ async def list_files():
 async def upload_files(
     files: List[UploadFile] = File(...),
     sender_device: str = Form("Неизвестное устройство"),
-    target_device: str = Form("Всем")
+    target_device: str = Form("Всем"),
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Form(None)
 ):
+    check_auth(x_app_pin, pin)
     saved_items = []
     with get_db() as conn:
         for file in files:
@@ -322,7 +395,12 @@ async def upload_files(
     return {"status": "ok", "uploaded": saved_items}
 
 @app.get("/api/download/{filename}")
-async def download_file(filename: str):
+async def download_file(
+    filename: str,
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Query(None)
+):
+    check_auth(x_app_pin, pin)
     file_path = os.path.join(UPLOADS_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Файл не найден")
@@ -341,7 +419,12 @@ async def download_file(filename: str):
     return FileResponse(file_path, media_type=content_type, headers=headers)
 
 @app.delete("/api/files/{file_id}")
-async def delete_file(file_id: int):
+async def delete_file(
+    file_id: int,
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Query(None)
+):
+    check_auth(x_app_pin, pin)
     with get_db() as conn:
         row = conn.execute("SELECT filename FROM files WHERE id = ?", (file_id,)).fetchone()
         if row:
@@ -359,7 +442,11 @@ async def delete_file(file_id: int):
     return {"status": "deleted", "id": file_id}
 
 @app.post("/api/clear-history")
-async def clear_history():
+async def clear_history(
+    x_app_pin: Optional[str] = Header(None),
+    pin: Optional[str] = Query(None)
+):
+    check_auth(x_app_pin, pin)
     with get_db() as conn:
         conn.execute("DELETE FROM texts")
         # Remove all files
@@ -382,9 +469,17 @@ async def clear_history():
 async def websocket_endpoint(websocket: WebSocket):
     client_id = str(uuid.uuid4())
     try:
-        # Client sends initial handshake payload with device info
+        # Check PIN from query params or auth payload
+        query_pin = websocket.query_params.get("pin")
         await websocket.accept()
         init_data = await websocket.receive_json()
+
+        auth_pin = query_pin or init_data.get("pin")
+        if not verify_pin(auth_pin):
+            await websocket.send_json({"type": "auth_error", "message": "Неверный PIN-код"})
+            await websocket.close(code=1008)
+            return
+
         device_name = init_data.get("device_name", "Браузер")
         device_type = init_data.get("device_type", "desktop")  # 'ios', 'android', 'desktop'
         

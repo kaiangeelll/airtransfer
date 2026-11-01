@@ -994,7 +994,158 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* Mobile Optimizations */
+/* Recipient Selector Bar */
+.recipient-selector-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
+.recipient-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-blue);
+}
+
+.recipient-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.form-select-sm {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    max-width: 240px;
+}
+
+/* Settings Modal */
+.settings-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+}
+
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+
+.settings-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.pin-inputs-row {
+    display: flex;
+    gap: 8px;
+}
+
+.pin-inputs-row .form-input {
+    flex: 1;
+}
+
+/* PIN Lock Screen */
+.pin-lock-overlay {
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    background: rgba(8, 9, 13, 0.92);
+    z-index: 9999;
+}
+
+.pin-lock-card {
+    text-align: center;
+    max-width: 360px;
+    padding: 30px 24px;
+}
+
+.lock-icon-wrap {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background: rgba(0, 113, 227, 0.15);
+    color: var(--accent-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+}
+
+.pin-lock-header h3 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.pin-lock-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 20px;
+}
+
+.pin-lock-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.pin-big-input {
+    font-size: 24px;
+    letter-spacing: 8px;
+    text-align: center;
+    padding: 12px;
+    font-weight: 700;
+    font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+
+.pin-submit-btn {
+    width: 100%;
+    padding: 13px;
+    font-size: 15px;
+}
+
+.pin-hint-text {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.pin-hint-text b {
+    color: var(--accent-blue);
+}
+
+/* Feed item target tag */
+.target-badge {
+    background: rgba(0, 113, 227, 0.15);
+    color: var(--accent-blue);
+    border: 1px solid rgba(0, 113, 227, 0.3);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 4px;
+}
 @media (max-width: 640px) {
     .app-container {
         padding: 12px 10px 32px;
